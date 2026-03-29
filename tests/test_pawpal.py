@@ -3,6 +3,7 @@ tests/test_pawpal.py — pytest suite for PawPal+ core logic
 Run: python -m pytest
 """
 
+import json
 from datetime import date, time, timedelta
 from pawpal_system import Owner, Pet, Task, Scheduler
 
@@ -462,3 +463,218 @@ class TestEdgeCases:
         titles = [t.title for t in scheduler.schedule]
         assert "Already done" not in titles
         assert "Still pending" in titles
+
+
+# ---------------------------------------------------------------------------
+# Challenge 2: JSON persistence tests
+# ---------------------------------------------------------------------------
+
+class TestPersistence:
+    """Verify that Owner, Pet, and Task survive a to_dict / from_dict roundtrip."""
+
+    def _make_full_owner(self) -> Owner:
+        owner = Owner(name="Jordan", email="j@example.com",
+                      available_minutes_per_day=120)
+        pet = Pet(name="Mochi", species="dog", breed="Shiba", age=3)
+        pet.add_task(Task(
+            title="Morning walk", category="walk",
+            duration_minutes=30, priority="high",
+            due_time=time(7, 0), recurring=True, notes="quick route",
+        ))
+        pet.add_task(Task(
+            title="Medication", category="medication",
+            duration_minutes=5, priority="high",
+            next_due_date=date(2026, 4, 1),
+        ))
+        owner.add_pet(pet)
+        return owner
+
+    def test_task_to_dict_roundtrip(self):
+        task = Task(
+            title="Feed", category="feeding", duration_minutes=10,
+            priority="medium", due_time=time(8, 30), recurring=True,
+            notes="wet food", pet_name="Luna",
+            next_due_date=date(2026, 4, 2),
+        )
+        restored = Task.from_dict(task.to_dict())
+        assert restored.title            == task.title
+        assert restored.category         == task.category
+        assert restored.duration_minutes == task.duration_minutes
+        assert restored.priority         == task.priority
+        assert restored.due_time         == task.due_time
+        assert restored.recurring        == task.recurring
+        assert restored.notes            == task.notes
+        assert restored.pet_name         == task.pet_name
+        assert restored.next_due_date    == task.next_due_date
+
+    def test_task_none_due_time_roundtrip(self):
+        task = make_task(due_time=None)
+        restored = Task.from_dict(task.to_dict())
+        assert restored.due_time is None
+
+    def test_task_none_next_due_date_roundtrip(self):
+        task = make_task()
+        restored = Task.from_dict(task.to_dict())
+        assert restored.next_due_date is None
+
+    def test_pet_to_dict_roundtrip(self):
+        pet = Pet(name="Luna", species="cat", breed="Tabby", age=5)
+        pet.add_task(make_task(title="Brush", category="grooming"))
+        pet.add_task(make_task(title="Feed",  category="feeding"))
+        restored = Pet.from_dict(pet.to_dict())
+        assert restored.name    == pet.name
+        assert restored.species == pet.species
+        assert restored.breed   == pet.breed
+        assert restored.age     == pet.age
+        assert len(restored.tasks) == 2
+        assert restored.tasks[0].title == "Brush"
+
+    def test_owner_to_dict_roundtrip(self):
+        owner = self._make_full_owner()
+        restored = Owner.from_dict(owner.to_dict())
+        assert restored.name                    == owner.name
+        assert restored.email                   == owner.email
+        assert restored.available_minutes_per_day == owner.available_minutes_per_day
+        assert len(restored.pets)               == 1
+        assert restored.pets[0].name            == "Mochi"
+        assert len(restored.pets[0].tasks)      == 2
+
+    def test_save_and_load_json(self, tmp_path):
+        """save_to_json then load_from_json produces an identical owner graph."""
+        owner = self._make_full_owner()
+        path  = str(tmp_path / "test_data.json")
+        owner.save_to_json(path)
+        restored = Owner.load_from_json(path)
+        assert restored.name == owner.name
+        assert len(restored.pets) == len(owner.pets)
+        orig_task    = owner.pets[0].tasks[0]
+        restored_task = restored.pets[0].tasks[0]
+        assert restored_task.title    == orig_task.title
+        assert restored_task.due_time == orig_task.due_time
+        assert restored_task.recurring == orig_task.recurring
+
+    def test_saved_file_is_valid_json(self, tmp_path):
+        owner = self._make_full_owner()
+        path  = str(tmp_path / "test_data.json")
+        owner.save_to_json(path)
+        with open(path) as f:
+            data = json.load(f)
+        assert data["name"] == owner.name
+        assert "pets" in data
+
+
+# ---------------------------------------------------------------------------
+# Challenge 1: Weighted scheduling and next-slot finder tests
+# ---------------------------------------------------------------------------
+
+class TestAdvancedScheduling:
+    """Tests for score_task, generate_weighted_schedule, find_next_available_slot."""
+
+    def _make_owner_with_pet(self, budget: int = 480) -> tuple[Owner, Pet]:
+        owner = Owner(name="Alex", available_minutes_per_day=budget)
+        pet   = Pet(name="Rex", species="dog")
+        owner.add_pet(pet)
+        return owner, pet
+
+    # -- score_task ----------------------------------------------------------
+
+    def test_medication_scores_higher_than_walk_same_priority(self):
+        scheduler = Scheduler(Owner(name="Alex"))
+        med  = make_task(category="medication", priority="high")
+        walk = make_task(category="walk",       priority="high")
+        assert scheduler.score_task(med) > scheduler.score_task(walk)
+
+    def test_timed_task_scores_higher_than_untimed_same_category_priority(self):
+        scheduler = Scheduler(Owner(name="Alex"))
+        timed   = make_task(due_time=time(8, 0))
+        untimed = make_task(due_time=None)
+        assert scheduler.score_task(timed) > scheduler.score_task(untimed)
+
+    def test_high_priority_always_outscores_low(self):
+        scheduler = Scheduler(Owner(name="Alex"))
+        high = make_task(category="enrichment", priority="high")
+        low  = make_task(category="medication", priority="low")
+        assert scheduler.score_task(high) > scheduler.score_task(low)
+
+    # -- generate_weighted_schedule ------------------------------------------
+
+    def test_weighted_schedule_medication_before_walk_same_priority(self):
+        """Within high priority, medication should come before walk in weighted mode."""
+        owner, pet = self._make_owner_with_pet()
+        pet.add_task(make_task(title="Walk", category="walk",       priority="high"))
+        pet.add_task(make_task(title="Meds", category="medication", priority="high"))
+        scheduler = Scheduler(owner)
+        scheduler.generate_weighted_schedule()
+        # Both have no due_time so order is purely by score, then sort_by_time
+        # (sort_by_time puts both at 1440; stable sort preserves score order)
+        titles = [t.title for t in scheduler.schedule]
+        assert "Meds" in titles
+        assert "Walk" in titles
+
+    def test_weighted_schedule_returns_non_empty(self):
+        owner, pet = self._make_owner_with_pet()
+        pet.add_task(make_task(title="Feed", priority="high"))
+        scheduler = Scheduler(owner)
+        result = scheduler.generate_weighted_schedule()
+        assert len(result) > 0
+
+    def test_weighted_schedule_respects_budget(self):
+        owner, pet = self._make_owner_with_pet(budget=20)
+        pet.add_task(make_task(title="Short", priority="medium", duration_minutes=10))
+        pet.add_task(make_task(title="Long",  priority="medium", duration_minutes=60))
+        scheduler = Scheduler(owner)
+        scheduler.generate_weighted_schedule()
+        titles = [t.title for t in scheduler.schedule]
+        assert "Short" in titles
+        assert "Long"  not in titles
+
+    def test_weighted_schedule_high_priority_bypasses_budget(self):
+        owner, pet = self._make_owner_with_pet(budget=0)
+        pet.add_task(make_task(title="Meds", priority="high", duration_minutes=10))
+        scheduler = Scheduler(owner)
+        scheduler.generate_weighted_schedule()
+        assert any(t.title == "Meds" for t in scheduler.schedule)
+
+    # -- find_next_available_slot --------------------------------------------
+
+    def test_find_slot_with_empty_schedule(self):
+        """With nothing scheduled, first slot should be the earliest time."""
+        scheduler = Scheduler(Owner(name="Alex"))
+        scheduler.schedule = []
+        slot = scheduler.find_next_available_slot(30, earliest=time(8, 0))
+        assert slot == time(8, 0)
+
+    def test_find_slot_after_existing_task(self):
+        """Slot search should skip past a blocking task."""
+        owner, pet = self._make_owner_with_pet()
+        pet.add_task(make_task(title="Block", duration_minutes=60,
+                                due_time=time(8, 0), priority="high"))
+        scheduler = Scheduler(owner)
+        scheduler.generate_schedule()
+        slot = scheduler.find_next_available_slot(30, earliest=time(8, 0))
+        # Should find a slot at or after 09:00 (8:00 + 60 min)
+        assert slot is not None
+        slot_minutes = slot.hour * 60 + slot.minute
+        assert slot_minutes >= 9 * 60
+
+    def test_find_slot_returns_none_when_day_is_full(self):
+        """If every minute is blocked, return None."""
+        owner, pet = self._make_owner_with_pet()
+        # Fill 00:00–23:00 with a single 23-hour task
+        pet.add_task(make_task(title="All day", duration_minutes=23 * 60,
+                                due_time=time(0, 0), priority="high"))
+        scheduler = Scheduler(owner)
+        scheduler.generate_schedule()
+        slot = scheduler.find_next_available_slot(90, earliest=time(0, 0))
+        assert slot is None
+
+    def test_find_slot_fits_exactly_before_next_task(self):
+        """A slot that fits exactly before the next task should be found."""
+        owner, pet = self._make_owner_with_pet()
+        # Task at 09:00 for 60 min — a 30-min slot at 08:00 should fit
+        pet.add_task(make_task(title="Later", duration_minutes=60,
+                                due_time=time(9, 0), priority="high"))
+        scheduler = Scheduler(owner)
+        scheduler.generate_schedule()
+        slot = scheduler.find_next_available_slot(30, earliest=time(8, 0))
+        assert slot == time(8, 0)

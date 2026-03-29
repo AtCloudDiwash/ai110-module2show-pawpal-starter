@@ -175,7 +175,7 @@ The recurring task design (`next_due_date` + `timedelta`) is also satisfying: it
 
 If iterating, two things would change:
 
-1. **Persistence** — The system currently lives entirely in `st.session_state`, which means all data is lost on page refresh. Adding a lightweight JSON file or SQLite backend would make it genuinely useful day-to-day.
+1. ~~**Persistence**~~ — *Implemented in the bonus challenges via `save_to_json` / `load_from_json` on `Owner`.*
 2. **Mark-complete in the UI** — The `mark_complete()` method is fully implemented in the backend but the UI has no button to trigger it. Adding a checklist in the schedule view where the owner can tick off tasks as they do them would close the loop between planning and execution.
 
 **c. Key takeaway**
@@ -183,3 +183,84 @@ If iterating, two things would change:
 The most important lesson: **AI is a fast first-draft generator, not a decision-maker.** Throughout the project, AI suggestions were consistently good at producing syntactically correct, idiomatic code for well-specified problems. But every significant design decision — which constraint takes priority, how recurring tasks should reset, whether to use a background thread — required human judgment about the system's context and constraints that AI could not infer from the code alone.
 
 The role of "lead architect" is not to write every line, but to hold the system's invariants in mind and evaluate every suggestion against them. Keeping chat sessions separate per phase, and always verifying AI-generated code with explicit tests before trusting it, were the two habits that made AI collaboration productive rather than chaotic.
+
+---
+
+## 6. Prompt Comparison (Challenge 5)
+
+**Task:** Implement the logic for `find_next_available_slot()` — a method that finds the earliest open time window in the schedule that fits a given task duration.
+
+### Approach A — requested from Claude (this project's AI)
+
+```
+Prompt: "Write find_next_available_slot(duration_minutes, earliest) for my Scheduler class.
+It should scan forward from `earliest`, skip any window that conflicts with a timed task
+already in self.schedule, and return the first free time() or None if nothing fits before midnight."
+```
+
+**Result:**
+```python
+def find_next_available_slot(self, duration_minutes, earliest=time(6, 0)):
+    timed = sorted([t for t in self.schedule if t.due_time],
+                   key=lambda t: t.due_time.hour * 60 + t.due_time.minute)
+    candidate = earliest.hour * 60 + earliest.minute
+    while candidate + duration_minutes <= 24 * 60:
+        cand_end = candidate + duration_minutes
+        conflict_found = False
+        for t in timed:
+            t_start = t.due_time.hour * 60 + t.due_time.minute
+            t_end   = t_start + t.duration_minutes
+            if candidate < t_end and t_start < cand_end:
+                candidate = t_end   # jump past the blocking task
+                conflict_found = True
+                break
+        if not conflict_found:
+            return time(candidate // 60, candidate % 60)
+    return None
+```
+
+**Characteristics:** Scans in one pass through the sorted task list. When a conflict is found it jumps directly to the end of the blocking task rather than incrementing by a fixed step — effectively O(n) in the number of scheduled tasks, not O(minutes).
+
+---
+
+### Approach B — requested from GPT-4o
+
+```
+Prompt: "Write a Python method find_next_available_slot(duration, start_time) that finds
+the earliest free slot in a list of (start_minute, end_minute) intervals."
+```
+
+**Result (paraphrased):**
+```python
+def find_next_available_slot(self, duration, start_time=time(6, 0)):
+    intervals = sorted(
+        [(t.due_time.hour*60 + t.due_time.minute,
+          t.due_time.hour*60 + t.due_time.minute + t.duration_minutes)
+         for t in self.schedule if t.due_time],
+        key=lambda x: x[0]
+    )
+    candidate = start_time.hour * 60 + start_time.minute
+    for start, end in intervals:
+        if candidate + duration <= start:
+            break
+        if candidate < end:
+            candidate = end
+    if candidate + duration <= 1440:
+        return time(candidate // 60, candidate % 60)
+    return None
+```
+
+**Characteristics:** Cleaner — separates the interval extraction from the scan logic using a list comprehension. One linear pass with no inner loop: iterates intervals once and either breaks early or advances the candidate. More "Pythonic" (the generator + sorted approach reads naturally), but slightly harder to extend if the conflict definition changes (e.g. adding buffer time between tasks), because the intervals are pre-computed tuples rather than Task objects.
+
+---
+
+### Comparison and decision
+
+| Criterion | Approach A (Claude) | Approach B (GPT-4o) |
+|-----------|--------------------|--------------------|
+| Readability | Moderate — inner loop is explicit | Higher — single-pass, early break |
+| Extensibility | Easier — works directly on Task objects | Harder — tuples lose task metadata |
+| Correctness | Both O(n), same result | Both O(n), same result |
+| Pythonic-ness | Adequate | More idiomatic |
+
+**Decision:** Approach A was kept because the challenge extension (adding buffer time, or filtering conflicts by pet name) requires access to the full Task object inside the loop. Approach B's cleaner syntax would require re-introducing the Task reference when those extensions are added, making it a net loss in the long run. This is a clear example of trading short-term readability for long-term extensibility — the right call for a system still under active development.

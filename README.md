@@ -16,6 +16,9 @@
 | **Recurring tasks** | Marking a recurring task complete schedules its next occurrence for tomorrow via `timedelta(days=1)` — no background job needed. |
 | **Conflict detection** | The scheduler flags any two timed tasks whose windows overlap `[start, start + duration)` and displays a prominent warning in the UI. |
 | **Filter tasks** | View tasks filtered by pet, category, or completion status using the sidebar controls. |
+| **Data persistence** | `Owner.save_to_json()` / `load_from_json()` serialise the full owner graph (pets + tasks, including `time` and `date` fields) to `data.json`. The app auto-loads on startup. |
+| **Weighted urgency scheduling** | An alternative `generate_weighted_schedule()` method scores each task by `priority_weight + category_urgency + time_bonus`, producing finer-grained ordering within priority tiers (medications before walks, even if both are "high"). |
+| **Next available slot** | `find_next_available_slot(duration, earliest)` scans forward from a given time and returns the first conflict-free window that fits the requested duration. Exposed in the UI as an interactive finder. |
 | **CLI demo** | `main.py` lets you verify all backend logic from the terminal without launching the UI. |
 
 ---
@@ -100,7 +103,7 @@ python -m pytest          # quick pass/fail summary
 python -m pytest -v       # verbose — shows every test name
 ```
 
-**44 tests across 5 test classes — all passing.**
+**62 tests across 7 test classes — all passing.**
 
 | Class | Coverage |
 |-------|----------|
@@ -109,6 +112,8 @@ python -m pytest -v       # verbose — shows every test name
 | `TestOwner` | pet registration, removal, task aggregation |
 | `TestScheduler` | priority sort, time sort, filter (single + combined), conflict detection, budget enforcement, warning strings |
 | `TestEdgeCases` | empty owner/pet, all tasks done, zero budget, touching windows, multiple conflicts, combined filters, recurring reappearance |
+| `TestPersistence` | `to_dict`/`from_dict` roundtrips for Task, Pet, Owner; `save_to_json`/`load_from_json`; saved file is valid JSON |
+| `TestAdvancedScheduling` | `score_task` ordering; `generate_weighted_schedule` budget and bypass; `find_next_available_slot` (empty, jump-past-blocker, full-day None, exact-fit) |
 
 **Confidence: ★★★★☆** — backend logic is fully covered; Streamlit UI layer requires manual verification.
 
