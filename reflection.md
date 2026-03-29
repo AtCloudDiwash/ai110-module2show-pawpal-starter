@@ -9,14 +9,15 @@
 
 **a. Initial design**
 
-Four classes were chosen:
+When I first looked at the problem I tried to think about what real objects exist in a pet care scenario. A person owns pets, those pets have care tasks, and something needs to figure out the daily plan. That gave me four classes pretty naturally.
 
-| Class | Responsibility |
-|-------|---------------|
-| `Task` | Represents a single care item. Holds what needs to happen (`title`, `category`), how long it takes (`duration_minutes`), urgency (`priority`), when it should occur (`due_time`), and whether it repeats (`recurring`). Implemented as a Python `dataclass`. |
-| `Pet` | Represents one animal. Owns a list of `Task` objects and exposes helpers to add/remove tasks and retrieve only those due today. Also a `dataclass`. |
-| `Owner` | Represents the human. Owns a list of `Pet` objects and a daily time budget (`available_minutes_per_day`). Aggregates tasks across all pets for the scheduler. |
-| `Scheduler` | Orchestrates the planning logic. Takes an `Owner`, collects today's tasks, sorts them by priority, checks the time budget, detects time conflicts between tasks, and produces a readable summary. Plain class (not a dataclass). |
+`Task` felt like the core building block — it needed to know what to do, how long it would take, how urgent it was, and whether it happened every day or just once. I used a Python dataclass here because it's basically just data with a couple of helper methods.
+
+`Pet` is a container for tasks. It knows its own name, species, age, and breed, but its main job is holding the list of tasks and answering the question "what needs to happen today?" I kept it as a dataclass too since it's mostly storing information.
+
+`Owner` sits above the pets. It stores the person's name and — importantly — how many minutes they actually have free each day. That time budget turned out to be really important for the scheduler later. It also has methods to add and remove pets.
+
+`Scheduler` was the one I thought hardest about. It's not really a data object — it's more like a brain that takes an owner, looks at all the pets and tasks, and figures out what to do. I made it a regular class instead of a dataclass because its whole point is the logic inside it, not the data it holds.
 
 Relationships:
 - `Owner` has 0..* `Pet` objects.
@@ -108,13 +109,11 @@ Priority was chosen as the dominant constraint because a pet owner's first conce
 
 **b. Tradeoffs**
 
-One tradeoff in the scheduler is **how recurring tasks are reset after completion**.
+One tradeoff I had to make was around how recurring tasks get reset after you mark them done. My first instinct was to use a background job that resets the task at midnight, so it would show up as completed for the rest of the day and then come back fresh tomorrow. But that felt like overkill for an app this small — it would mean the app needs to be running in the background constantly, which doesn't really make sense for something a single person opens on their phone or laptop.
 
-When `mark_complete()` is called on a recurring task, `next_due_date` is set to `date.today() + timedelta(days=1)`, making the task disappear from today's schedule immediately. An alternative would be to reset it at midnight using a background job, keeping it visible as "done" for the rest of the day.
+Instead I went with a simpler approach: when you mark a recurring task complete, it just sets a `next_due_date` to tomorrow using `timedelta(days=1)`. The task disappears from today's list right away and comes back automatically the next day. It's a bit less polished — if you accidentally tap "done" on something, you have to wait until tomorrow to see it again — but for a personal app I think that's an acceptable tradeoff.
 
-The timedelta approach was chosen because it is simple, stateless, and requires no background process — appropriate for a single-user app where the owner marks things off as they go. The tradeoff is that if the owner accidentally marks a task complete, it won't reappear until tomorrow.
-
-A second tradeoff is **conflict detection by overlapping time windows only**. The scheduler flags conflicts between any two timed tasks whose windows intersect, but it does not account for travel time between locations or the owner having two pets that need simultaneous attention. This keeps the algorithm O(n²) and easy to reason about, at the cost of missing some real-world scheduling constraints.
+The other tradeoff is with conflict detection. Right now the scheduler only checks whether two tasks overlap in time, like if a 30-minute walk starts at 8:00 and another task starts at 8:15. It doesn't know about things like travel time between locations, or the fact that you physically can't be grooming one pet and feeding another at the exact same moment. I kept it simple on purpose — the overlap check is straightforward to understand and test — but in a more realistic version you'd probably want to add some buffer time between tasks and maybe group tasks by pet so conflicts make more contextual sense.
 
 ---
 
@@ -159,7 +158,9 @@ These tests mattered because the scheduling logic has subtle interactions: a rec
 
 **b. Confidence**
 
-★★★★☆ — The backend logic is well-covered. The remaining uncertainty is in the Streamlit UI (`app.py`): `session_state` persistence and re-run behaviour are not covered by automated tests, so a manual walkthrough is still needed for the UI layer. If I had more time I would add tests for: a pet with 50+ tasks (performance), tasks that span midnight (edge of day boundary), and an owner whose available minutes exactly equals the total task duration (boundary condition).
+I'd give myself about 3 out of 5 stars on confidence. The core logic on scheduling, sorting, filtering, conflict detection, recurring tasks has test cases, and I feel mostly good, while few things still feels confusing. I believe with AI it gets a lot easier. Additionally, The part I'm less sure about is the Streamlit UI. Things like whether `session_state` holds up correctly when you click around a lot, or whether the app behaves the right way after a page refresh, aren't covered by any automated tests. I just manually clicked through it a few times, which isn't the same thing.
+
+If I had more time I'd test a few more edge cases. For example, what happens with a pet that has tons of tasks, or a task that runs past midnight, or when the budget exactly matches the total task duration. Those feel like the spots most likely to break quietly.
 
 ---
 
@@ -250,17 +251,14 @@ def find_next_available_slot(self, duration, start_time=time(6, 0)):
     return None
 ```
 
-**Characteristics:** Cleaner — separates the interval extraction from the scan logic using a list comprehension. One linear pass with no inner loop: iterates intervals once and either breaks early or advances the candidate. More "Pythonic" (the generator + sorted approach reads naturally), but slightly harder to extend if the conflict definition changes (e.g. adding buffer time between tasks), because the intervals are pre-computed tuples rather than Task objects.
+**Characteristics:** This one is honestly cleaner to read. It pulls out the interval math into a list comprehension first, then does a single loop through the results with an early break. It felt more Pythonic and I liked how short it was. The downside is that once you convert tasks into plain tuples, you lose access to the Task object itself. So if you ever wanted to add something like buffer time between tasks or filter conflicts by pet name, you'd have to rework it. That's why I didn't end up using it.
 
 ---
 
 ### Comparison and decision
 
-| Criterion | Approach A (Claude) | Approach B (GPT-4o) |
-|-----------|--------------------|--------------------|
-| Readability | Moderate — inner loop is explicit | Higher — single-pass, early break |
-| Extensibility | Easier — works directly on Task objects | Harder — tuples lose task metadata |
-| Correctness | Both O(n), same result | Both O(n), same result |
-| Pythonic-ness | Adequate | More idiomatic |
+Both approaches produce the same result and run in O(n) time, so correctness wasn't really the deciding factor. GPT-4o's version is nicer to read and feels more idiomatic Python. Claude's version has an explicit inner loop which is a bit more verbose, but it keeps the full Task object available the whole time.
+
+I went with Approach A in the end because I wanted to be able to extend the conflict logic later without rewriting everything. If I ever add buffer time between tasks or want to filter by pet name inside the slot finder, having access to the Task object directly makes that a lot easier. Approach B would have required going back and unpacking the tuples again, which felt like a step backwards.
 
 **Decision:** Approach A was kept because the challenge extension (adding buffer time, or filtering conflicts by pet name) requires access to the full Task object inside the loop. Approach B's cleaner syntax would require re-introducing the Task reference when those extensions are added, making it a net loss in the long run. This is a clear example of trading short-term readability for long-term extensibility — the right call for a system still under active development.

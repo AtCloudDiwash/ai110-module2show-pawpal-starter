@@ -1,0 +1,39 @@
+{
+  "name": "Jordan",
+  "email": "john@doe.com",
+  "available_minutes_per_day": 120,
+  "pets": [
+    {
+      "name": "Mochi",
+      "species": "dog",
+      "breed": "",
+      "age": 2,
+      "tasks": [
+        {
+          "title": "Morning walk",
+          "category": "walk",
+          "duration_minutes": 20,
+          "priority": "high",
+          "due_time": null,
+          "recurring": false,
+          "completed": false,
+          "notes": "",
+          "pet_name": "Mochi",
+          "next_due_date": null
+        },
+        {
+          "title": "Evening Walk",
+          "category": "walk",
+          "duration_minutes": 20,
+          "priority": "medium",
+          "due_time": null,
+          "recurring": false,
+          "completed": false,
+          "notes": "",
+          "pet_name": "Mochi",
+          "next_due_date": null
+        }
+      ]
+    }
+  ]
+}
