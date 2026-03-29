@@ -287,3 +287,178 @@ class TestScheduler:
         warnings = scheduler.conflict_warnings()
         assert len(warnings) == 1
         assert "CONFLICT" in warnings[0]
+
+
+# ---------------------------------------------------------------------------
+# Edge-case tests
+# ---------------------------------------------------------------------------
+
+class TestEdgeCases:
+    """Boundary conditions and unusual-but-valid inputs."""
+
+    # -- Empty / zero-item cases ---------------------------------------------
+
+    def test_owner_with_no_pets_produces_empty_schedule(self):
+        scheduler = Scheduler(Owner(name="Alex"))
+        result = scheduler.generate_schedule()
+        assert result == []
+
+    def test_pet_with_no_tasks_returns_empty_today(self):
+        pet = Pet(name="Ghost", species="cat")
+        assert pet.get_tasks_for_today() == []
+
+    def test_owner_with_no_pets_get_all_tasks_is_empty(self):
+        owner = Owner(name="Alex")
+        assert owner.get_all_tasks() == []
+
+    def test_all_tasks_completed_produces_empty_schedule(self):
+        """If every task is already done, nothing should be scheduled."""
+        owner = Owner(name="Alex")
+        pet = Pet(name="Rex", species="dog")
+        t = make_task(recurring=False)
+        t.mark_complete()
+        pet.add_task(t)
+        owner.add_pet(pet)
+        scheduler = Scheduler(owner)
+        assert scheduler.generate_schedule() == []
+
+    def test_get_summary_empty_schedule(self):
+        """get_summary() on an empty schedule returns a safe fallback string."""
+        scheduler = Scheduler(Owner(name="Alex"))
+        scheduler.generate_schedule()
+        summary = scheduler.get_summary()
+        assert "No tasks" in summary
+
+    def test_sort_by_priority_empty_list(self):
+        scheduler = Scheduler(Owner(name="Alex"))
+        assert scheduler.sort_by_priority([]) == []
+
+    def test_sort_by_time_empty_list(self):
+        scheduler = Scheduler(Owner(name="Alex"))
+        assert scheduler.sort_by_time([]) == []
+
+    def test_filter_tasks_no_match_returns_empty(self):
+        scheduler = Scheduler(Owner(name="Alex"))
+        tasks = [make_task(title="Walk", category="walk")]
+        result = scheduler.filter_tasks(tasks, category="medication")
+        assert result == []
+
+    # -- Conflict edge cases -------------------------------------------------
+
+    def test_tasks_without_due_time_never_conflict(self):
+        """Untimed tasks should never be flagged as conflicting."""
+        owner = Owner(name="Alex")
+        pet = Pet(name="Rex", species="dog")
+        pet.add_task(make_task(title="A", due_time=None, priority="high"))
+        pet.add_task(make_task(title="B", due_time=None, priority="high"))
+        owner.add_pet(pet)
+        scheduler = Scheduler(owner)
+        scheduler.generate_schedule()
+        assert scheduler.detect_conflicts() == []
+
+    def test_tasks_touching_but_not_overlapping_are_not_conflicts(self):
+        """Task A ending exactly when task B starts should NOT be a conflict."""
+        owner = Owner(name="Alex")
+        pet = Pet(name="Rex", species="dog")
+        # A: 08:00–08:30, B: 08:30–09:00 — they touch but don't overlap
+        pet.add_task(make_task(title="A", duration_minutes=30, due_time=time(8, 0),  priority="high"))
+        pet.add_task(make_task(title="B", duration_minutes=30, due_time=time(8, 30), priority="high"))
+        owner.add_pet(pet)
+        scheduler = Scheduler(owner)
+        scheduler.generate_schedule()
+        assert scheduler.detect_conflicts() == []
+
+    def test_multiple_conflicts_detected(self):
+        """Three mutually overlapping tasks should produce three conflict pairs."""
+        owner = Owner(name="Alex")
+        pet = Pet(name="Rex", species="dog")
+        # All three start at 08:00 and run 60 min — every pair overlaps
+        for title in ("A", "B", "C"):
+            pet.add_task(make_task(title=title, duration_minutes=60,
+                                   due_time=time(8, 0), priority="high"))
+        owner.add_pet(pet)
+        scheduler = Scheduler(owner)
+        scheduler.generate_schedule()
+        assert len(scheduler.detect_conflicts()) == 3
+
+    def test_exact_same_start_time_is_a_conflict(self):
+        """Two tasks starting at the identical minute must be flagged."""
+        owner = Owner(name="Alex")
+        pet = Pet(name="Rex", species="dog")
+        pet.add_task(make_task(title="A", duration_minutes=15, due_time=time(9, 0), priority="high"))
+        pet.add_task(make_task(title="B", duration_minutes=15, due_time=time(9, 0), priority="high"))
+        owner.add_pet(pet)
+        scheduler = Scheduler(owner)
+        scheduler.generate_schedule()
+        assert len(scheduler.detect_conflicts()) == 1
+
+    # -- Budget edge cases ---------------------------------------------------
+
+    def test_zero_budget_still_schedules_high_priority(self):
+        """Even with 0 available minutes, high-priority tasks must be included."""
+        owner = Owner(name="Alex", available_minutes_per_day=0)
+        pet = Pet(name="Rex", species="dog")
+        pet.add_task(make_task(title="Meds", priority="high", duration_minutes=5))
+        owner.add_pet(pet)
+        scheduler = Scheduler(owner)
+        scheduler.generate_schedule()
+        assert any(t.title == "Meds" for t in scheduler.schedule)
+
+    def test_low_priority_dropped_when_budget_exceeded(self):
+        """Low-priority task should be skipped if budget is used up by higher ones."""
+        owner = Owner(name="Alex", available_minutes_per_day=30)
+        pet = Pet(name="Rex", species="dog")
+        pet.add_task(make_task(title="Big medium", priority="medium", duration_minutes=30))
+        pet.add_task(make_task(title="Small low",  priority="low",    duration_minutes=10))
+        owner.add_pet(pet)
+        scheduler = Scheduler(owner)
+        scheduler.generate_schedule()
+        titles = [t.title for t in scheduler.schedule]
+        assert "Big medium" in titles
+        assert "Small low" not in titles
+
+    # -- Filter combined criteria --------------------------------------------
+
+    def test_filter_combined_pet_and_category(self):
+        """Applying pet_name and category together should AND the conditions."""
+        owner = Owner(name="Alex")
+        mochi = Pet(name="Mochi", species="dog")
+        luna  = Pet(name="Luna",  species="cat")
+        mochi.add_task(make_task(title="Mochi walk", category="walk"))
+        mochi.add_task(make_task(title="Mochi feed", category="feeding"))
+        luna.add_task(make_task(title="Luna walk",  category="walk"))
+        owner.add_pet(mochi)
+        owner.add_pet(luna)
+        scheduler = Scheduler(owner)
+        scheduler.generate_schedule()
+        result = scheduler.filter_tasks(scheduler.schedule, pet_name="Mochi", category="walk")
+        assert len(result) == 1
+        assert result[0].title == "Mochi walk"
+
+    # -- Recurrence integration ----------------------------------------------
+
+    def test_recurring_task_reappears_next_day(self):
+        """Simulate completing a recurring task today and checking it's due tomorrow."""
+        task = make_task(recurring=True)
+        task.mark_complete()
+        tomorrow = date.today() + timedelta(days=1)
+        assert task.next_due_date == tomorrow
+        # Back-date to simulate tomorrow arriving
+        task.next_due_date = date.today()
+        assert task.is_due_today() is True
+
+    def test_non_recurring_completed_task_excluded_from_schedule(self):
+        """A completed non-recurring task must not appear in generate_schedule."""
+        owner = Owner(name="Alex")
+        pet = Pet(name="Rex", species="dog")
+        done = make_task(title="Already done", recurring=False)
+        done.mark_complete()
+        pending = make_task(title="Still pending")
+        pet.add_task(done)
+        pet.add_task(pending)
+        owner.add_pet(pet)
+        scheduler = Scheduler(owner)
+        scheduler.generate_schedule()
+        titles = [t.title for t in scheduler.schedule]
+        assert "Already done" not in titles
+        assert "Still pending" in titles

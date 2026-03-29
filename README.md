@@ -34,6 +34,33 @@ PawPal+ includes four algorithmic features that make the daily plan intelligent:
 | **Recurring tasks** | When a recurring task is marked complete, `timedelta(days=1)` schedules its next occurrence for tomorrow. It disappears from today's list immediately and reappears automatically the next day. |
 | **Conflict detection** | The scheduler compares every pair of timed tasks and flags any whose time windows overlap (`[start, start + duration)`). Warnings are returned as plain strings so the UI can display them without crashing. |
 
+## Testing PawPal+
+
+### Run the tests
+
+```bash
+python -m pytest          # quick summary
+python -m pytest -v       # verbose — shows every test name
+```
+
+### What the tests cover
+
+The suite lives in `tests/test_pawpal.py` and is organised into four classes:
+
+| Class | What it verifies |
+|-------|-----------------|
+| `TestTaskCompletion` | `mark_complete()` sets the flag; recurring tasks get a `next_due_date` of tomorrow via `timedelta`; non-recurring tasks stay done. |
+| `TestPetTaskManagement` | `add_task` / `remove_task` count changes; `add_task` tags the task with the pet's name; `get_tasks_for_today` excludes completed tasks. |
+| `TestOwner` | Pet registration and removal; `get_all_tasks` aggregates across all pets. |
+| `TestScheduler` | Priority sort (high → medium → low); chronological sort (`sort_by_time`); `filter_tasks` by pet, category, and completion; conflict detection including touching-but-not-overlapping and multiple pairs; budget enforcement; `conflict_warnings` string format; `get_summary` on empty schedule. |
+| `TestEdgeCases` | Owner with no pets, pet with no tasks, all tasks completed, zero-budget scheduling, tasks without `due_time` never conflict, multiple simultaneous conflicts, combined filter criteria, recurring task reappearance. |
+
+**44 tests — all passing.**
+
+### Confidence level: ★★★★☆
+
+The core logic (scheduling, sorting, filtering, conflict detection, recurrence) is thoroughly tested including boundary conditions. The one gap is the Streamlit UI layer (`app.py`), which is not covered by automated tests — manual verification is needed there.
+
 ## Getting started
 
 ### Setup
