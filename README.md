@@ -22,6 +22,18 @@ Your final app should:
 - Display the plan clearly (and ideally explain the reasoning)
 - Include tests for the most important scheduling behaviors
 
+## Smarter Scheduling
+
+PawPal+ includes four algorithmic features that make the daily plan intelligent:
+
+| Feature | How it works |
+|---------|-------------|
+| **Sort by priority** | Tasks are ranked high → medium → low, then by `due_time` within each tier, so the most urgent items always appear first. |
+| **Sort by time** | A separate `sort_by_time()` pass reorders the final accepted schedule chronologically so the output reads like a real itinerary. |
+| **Filter tasks** | `filter_tasks()` accepts any combination of `pet_name`, `completed`, and `category` keyword filters, making it easy to answer questions like "what walks are still pending for Mochi?" |
+| **Recurring tasks** | When a recurring task is marked complete, `timedelta(days=1)` schedules its next occurrence for tomorrow. It disappears from today's list immediately and reappears automatically the next day. |
+| **Conflict detection** | The scheduler compares every pair of timed tasks and flags any whose time windows overlap (`[start, start + duration)`). Warnings are returned as plain strings so the UI can display them without crashing. |
+
 ## Getting started
 
 ### Setup
