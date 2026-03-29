@@ -1,82 +1,156 @@
 # PawPal+ (Module 2 Project)
 
-You are building **PawPal+**, a Streamlit app that helps a pet owner plan care tasks for their pet.
+**PawPal+** is a smart daily pet care planner built with Python and Streamlit. It helps a busy pet owner stay consistent with feeding, walks, medications, and appointments by generating a prioritised, conflict-aware daily schedule.
 
-## Scenario
+---
 
-A busy pet owner needs help staying consistent with pet care. They want an assistant that can:
+## Features
 
-- Track pet care tasks (walks, feeding, meds, enrichment, grooming, etc.)
-- Consider constraints (time available, priority, owner preferences)
-- Produce a daily plan and explain why it chose that plan
+| Feature | Description |
+|---------|-------------|
+| **Multi-pet support** | Register any number of pets (dog, cat, other) under one owner profile. |
+| **Task management** | Add care tasks per pet with title, category, duration, priority, due time, and notes. |
+| **Priority-based scheduling** | `Scheduler.generate_schedule()` always includes high-priority tasks (e.g. medications) regardless of budget; medium and low tasks fill remaining time. |
+| **Sort by time** | The final schedule is reordered chronologically so it reads like a real itinerary. |
+| **Daily time budget** | Owner sets an available-minutes limit; tasks that don't fit are surfaced as "deferred" with an explanation. |
+| **Recurring tasks** | Marking a recurring task complete schedules its next occurrence for tomorrow via `timedelta(days=1)` — no background job needed. |
+| **Conflict detection** | The scheduler flags any two timed tasks whose windows overlap `[start, start + duration)` and displays a prominent warning in the UI. |
+| **Filter tasks** | View tasks filtered by pet, category, or completion status using the sidebar controls. |
+| **CLI demo** | `main.py` lets you verify all backend logic from the terminal without launching the UI. |
 
-Your job is to design the system first (UML), then implement the logic in Python, then connect it to the Streamlit UI.
-
-## What you will build
-
-Your final app should:
-
-- Let a user enter basic owner + pet info
-- Let a user add/edit tasks (duration + priority at minimum)
-- Generate a daily schedule/plan based on constraints and priorities
-- Display the plan clearly (and ideally explain the reasoning)
-- Include tests for the most important scheduling behaviors
+---
 
 ## Smarter Scheduling
 
-PawPal+ includes four algorithmic features that make the daily plan intelligent:
+The scheduling algorithm works in three passes:
 
-| Feature | How it works |
-|---------|-------------|
-| **Sort by priority** | Tasks are ranked high → medium → low, then by `due_time` within each tier, so the most urgent items always appear first. |
-| **Sort by time** | A separate `sort_by_time()` pass reorders the final accepted schedule chronologically so the output reads like a real itinerary. |
-| **Filter tasks** | `filter_tasks()` accepts any combination of `pet_name`, `completed`, and `category` keyword filters, making it easy to answer questions like "what walks are still pending for Mochi?" |
-| **Recurring tasks** | When a recurring task is marked complete, `timedelta(days=1)` schedules its next occurrence for tomorrow. It disappears from today's list immediately and reappears automatically the next day. |
-| **Conflict detection** | The scheduler compares every pair of timed tasks and flags any whose time windows overlap (`[start, start + duration)`). Warnings are returned as plain strings so the UI can display them without crashing. |
+1. **Collect** — gather all tasks due today from every pet (`is_due_today()` handles both recurring and one-off tasks).
+2. **Sort** — rank by priority (high → medium → low), then by `due_time` within each tier.
+3. **Select** — walk the sorted list and accept tasks until the owner's time budget is exhausted; high-priority tasks bypass the budget check entirely.
+
+After selection, a final `sort_by_time()` pass reorders the accepted tasks chronologically for display.
+
+---
+
+## System Architecture
+
+Four classes, three relationships:
+
+```mermaid
+classDiagram
+    class Owner {
+        +str name
+        +str email
+        +int available_minutes_per_day
+        +list~Pet~ pets
+        +add_pet(pet) None
+        +remove_pet(pet_name) None
+        +get_all_tasks() list~Task~
+    }
+
+    class Pet {
+        +str name
+        +str species
+        +str breed
+        +int age
+        +list~Task~ tasks
+        +add_task(task) None
+        +remove_task(task_title) None
+        +get_tasks_for_today() list~Task~
+    }
+
+    class Task {
+        +str title
+        +str category
+        +int duration_minutes
+        +str priority
+        +Optional~time~ due_time
+        +bool recurring
+        +bool completed
+        +str notes
+        +str pet_name
+        +Optional~date~ next_due_date
+        +is_due_today() bool
+        +mark_complete() None
+    }
+
+    class Scheduler {
+        +Owner owner
+        +list~Task~ schedule
+        +generate_schedule() list~Task~
+        +sort_by_priority(tasks) list~Task~
+        +sort_by_time(tasks) list~Task~
+        +filter_tasks(tasks, ...) list~Task~
+        +detect_conflicts() list~tuple~
+        +conflict_warnings() list~str~
+        +get_summary() str
+    }
+
+    Owner "1" --> "0..*" Pet : owns
+    Pet "1" --> "0..*" Task : has
+    Scheduler "1" --> "1" Owner : manages
+```
+
+---
 
 ## Testing PawPal+
 
-### Run the tests
-
 ```bash
-python -m pytest          # quick summary
+python -m pytest          # quick pass/fail summary
 python -m pytest -v       # verbose — shows every test name
 ```
 
-### What the tests cover
+**44 tests across 5 test classes — all passing.**
 
-The suite lives in `tests/test_pawpal.py` and is organised into four classes:
+| Class | Coverage |
+|-------|----------|
+| `TestTaskCompletion` | `mark_complete()`, `is_due_today()`, `next_due_date` via `timedelta` |
+| `TestPetTaskManagement` | add/remove tasks, `pet_name` tagging, today-filter |
+| `TestOwner` | pet registration, removal, task aggregation |
+| `TestScheduler` | priority sort, time sort, filter (single + combined), conflict detection, budget enforcement, warning strings |
+| `TestEdgeCases` | empty owner/pet, all tasks done, zero budget, touching windows, multiple conflicts, combined filters, recurring reappearance |
 
-| Class | What it verifies |
-|-------|-----------------|
-| `TestTaskCompletion` | `mark_complete()` sets the flag; recurring tasks get a `next_due_date` of tomorrow via `timedelta`; non-recurring tasks stay done. |
-| `TestPetTaskManagement` | `add_task` / `remove_task` count changes; `add_task` tags the task with the pet's name; `get_tasks_for_today` excludes completed tasks. |
-| `TestOwner` | Pet registration and removal; `get_all_tasks` aggregates across all pets. |
-| `TestScheduler` | Priority sort (high → medium → low); chronological sort (`sort_by_time`); `filter_tasks` by pet, category, and completion; conflict detection including touching-but-not-overlapping and multiple pairs; budget enforcement; `conflict_warnings` string format; `get_summary` on empty schedule. |
-| `TestEdgeCases` | Owner with no pets, pet with no tasks, all tasks completed, zero-budget scheduling, tasks without `due_time` never conflict, multiple simultaneous conflicts, combined filter criteria, recurring task reappearance. |
+**Confidence: ★★★★☆** — backend logic is fully covered; Streamlit UI layer requires manual verification.
 
-**44 tests — all passing.**
+---
 
-### Confidence level: ★★★★☆
-
-The core logic (scheduling, sorting, filtering, conflict detection, recurrence) is thoroughly tested including boundary conditions. The one gap is the Streamlit UI layer (`app.py`), which is not covered by automated tests — manual verification is needed there.
-
-## Getting started
+## Getting Started
 
 ### Setup
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate  # Windows: .venv\Scripts\activate
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### Suggested workflow
+### Run the app
 
-1. Read the scenario carefully and identify requirements and edge cases.
-2. Draft a UML diagram (classes, attributes, methods, relationships).
-3. Convert UML into Python class stubs (no logic yet).
-4. Implement scheduling logic in small increments.
-5. Add tests to verify key behaviors.
-6. Connect your logic to the Streamlit UI in `app.py`.
-7. Refine UML so it matches what you actually built.
+```bash
+streamlit run app.py
+```
+
+### Run the CLI demo
+
+```bash
+python main.py
+```
+
+### Run the tests
+
+```bash
+python -m pytest -v
+```
+
+---
+
+## Project Structure
+
+```
+pawpal_system.py   — backend logic (Owner, Pet, Task, Scheduler)
+app.py             — Streamlit UI
+main.py            — CLI demo / manual verification script
+tests/
+  test_pawpal.py   — 44 automated pytest tests
+reflection.md      — design decisions and AI collaboration notes
+```

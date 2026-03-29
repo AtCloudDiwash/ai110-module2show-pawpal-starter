@@ -57,6 +57,8 @@ classDiagram
         +bool recurring
         +bool completed
         +str notes
+        +str pet_name
+        +Optional~date~ next_due_date
         +is_due_today() bool
         +mark_complete() None
     }
@@ -65,8 +67,11 @@ classDiagram
         +Owner owner
         +list~Task~ schedule
         +generate_schedule() list~Task~
-        +detect_conflicts() list~tuple~
         +sort_by_priority(tasks) list~Task~
+        +sort_by_time(tasks) list~Task~
+        +filter_tasks(tasks, pet_name, completed, category) list~Task~
+        +detect_conflicts() list~tuple~
+        +conflict_warnings() list~str~
         +get_summary() str
     }
 
@@ -74,6 +79,10 @@ classDiagram
     Pet "1" --> "0..*" Task : has
     Scheduler "1" --> "1" Owner : manages
 ```
+
+**Changes from Phase 1 diagram:**
+- `Task` gained `pet_name` (set by `Pet.add_task()` for filtering) and `next_due_date` (set by `mark_complete()` on recurring tasks using `timedelta`).
+- `Scheduler` gained `sort_by_time()`, `filter_tasks()`, and `conflict_warnings()` — the three Phase 4 algorithmic additions.
 
 **b. Design changes**
 
@@ -86,8 +95,16 @@ classDiagram
 
 **a. Constraints and priorities**
 
-- What constraints does your scheduler consider (for example: time, priority, preferences)?
-- How did you decide which constraints mattered most?
+The scheduler considers two primary constraints:
+
+1. **Priority** (`high` / `medium` / `low`) — the most important constraint. High-priority tasks (medications, vet appointments) are always included regardless of time budget, because skipping them could harm the pet. Medium and low tasks are included only if budget permits.
+2. **Daily time budget** (`available_minutes_per_day`) — the owner's total free time. Tasks are accumulated in priority order until the budget is exhausted; any remainder is surfaced as "deferred."
+
+Secondary constraints handled by the UI but not hard-enforced by the algorithm:
+- **Due time** — used for chronological ordering and conflict detection, but not as a hard gate for inclusion.
+- **Completion status** — completed tasks are excluded from `get_tasks_for_today()` before the scheduler even sees them.
+
+Priority was chosen as the dominant constraint because a pet owner's first concern is animal welfare (medications must happen), while time is a softer limit that can be stretched if needed. Requiring the owner to set a budget makes the trade-off explicit rather than silently dropping tasks.
 
 **b. Tradeoffs**
 
@@ -105,13 +122,24 @@ A second tradeoff is **conflict detection by overlapping time windows only**. Th
 
 **a. How you used AI**
 
-- How did you use AI tools during this project (for example: design brainstorming, debugging, refactoring)?
-- What kinds of prompts or questions were most helpful?
+AI (Claude Code) was used in three distinct modes across the project phases:
+
+- **Design brainstorming (Phase 1):** Asked AI to evaluate the four-class design and generate a Mermaid.js UML diagram. The most effective prompts were concrete and scoped: *"Given these four classes, what relationships are missing or redundant?"* rather than open-ended *"design a pet app."*
+- **Code scaffolding (Phase 2):** Used AI to generate method stubs from the UML, then filled in the logic manually. This saved time on boilerplate while keeping the core algorithmic decisions under human control.
+- **Test generation (Phases 4–5):** Asked AI to suggest edge cases given a method signature and its expected contract. Prompts like *"What inputs would break sort_by_time?"* produced better results than *"Write tests for my code."*
+- **Refactoring review (Phase 4):** Shared individual methods and asked *"How could this be simplified without losing readability?"* — used AI suggestions as a code-review lens, not as automatic rewrites.
+
+The most effective pattern was **constraint-first prompting**: telling AI what must NOT change (e.g. *"high-priority tasks must always be scheduled regardless of budget"*) before asking it to suggest an implementation. This produced suggestions aligned with the design intent rather than generic algorithmic solutions.
 
 **b. Judgment and verification**
 
-- Describe one moment where you did not accept an AI suggestion as-is.
-- How did you evaluate or verify what the AI suggested?
+During Phase 4, AI initially suggested implementing recurring task reset using a background scheduler (`schedule` library) that would reset `completed = False` at midnight. The suggestion was technically valid, but rejected for two reasons:
+1. It introduced a stateful background thread into a stateless Streamlit app — a significant architectural mismatch.
+2. It required the app to be running at midnight, which is unrealistic for a personal-use tool.
+
+The alternative — storing `next_due_date` as a plain `date` field and checking `date.today() >= next_due_date` on every call to `is_due_today()` — was simpler, stateless, and more testable. This was verified by writing explicit unit tests for the before/after state of `mark_complete()` on a recurring task, and confirming the test matched the desired behavior before committing.
+
+The key judgment: AI optimises for completeness and correctness in isolation; the human architect must weigh proposals against the system's deployment context.
 
 ---
 
@@ -139,12 +167,19 @@ These tests mattered because the scheduling logic has subtle interactions: a rec
 
 **a. What went well**
 
-- What part of this project are you most satisfied with?
+The test-driven, CLI-first workflow (Phase 2 before Phase 3) was the most valuable decision. Because `pawpal_system.py` was verified independently via `main.py` and `pytest` before connecting it to Streamlit, UI bugs and backend bugs never became entangled. Every time a UI change broke something, the tests immediately showed whether the fault was in the logic layer or the display layer — never both at once.
+
+The recurring task design (`next_due_date` + `timedelta`) is also satisfying: it is three lines of code but produces correct behavior across day boundaries without any background process or external state.
 
 **b. What you would improve**
 
-- If you had another iteration, what would you improve or redesign?
+If iterating, two things would change:
+
+1. **Persistence** — The system currently lives entirely in `st.session_state`, which means all data is lost on page refresh. Adding a lightweight JSON file or SQLite backend would make it genuinely useful day-to-day.
+2. **Mark-complete in the UI** — The `mark_complete()` method is fully implemented in the backend but the UI has no button to trigger it. Adding a checklist in the schedule view where the owner can tick off tasks as they do them would close the loop between planning and execution.
 
 **c. Key takeaway**
 
-- What is one important thing you learned about designing systems or working with AI on this project?
+The most important lesson: **AI is a fast first-draft generator, not a decision-maker.** Throughout the project, AI suggestions were consistently good at producing syntactically correct, idiomatic code for well-specified problems. But every significant design decision — which constraint takes priority, how recurring tasks should reset, whether to use a background thread — required human judgment about the system's context and constraints that AI could not infer from the code alone.
+
+The role of "lead architect" is not to write every line, but to hold the system's invariants in mind and evaluate every suggestion against them. Keeping chat sessions separate per phase, and always verifying AI-generated code with explicit tests before trusting it, were the two habits that made AI collaboration productive rather than chaotic.
