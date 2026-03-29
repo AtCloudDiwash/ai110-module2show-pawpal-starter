@@ -261,3 +261,9 @@ def find_next_available_slot(self, duration, start_time=time(6, 0)):
 Both approaches produce the same result and run in O(n) time, so correctness wasn't really the deciding factor. GPT-4o's version is nicer to read and feels more idiomatic Python. Claude's version has an explicit inner loop which is a bit more verbose, but it keeps the full Task object available the whole time.
 
 I went with Approach A in the end because I wanted to be able to extend the conflict logic later without rewriting everything. If I ever add buffer time between tasks or want to filter by pet name inside the slot finder, having access to the Task object directly makes that a lot easier. Approach B would have required going back and unpacking the tuples again, which felt like a step backwards.
+
+
+
+### Comparison and decision
+
+This project was comparatively harder for me, actually second harder. The hardest, so far, was the first assignment. I was confused on almost every phase. With the help of AI's simplified explaination, it became easy for me to better understand the realtionship in UML diagram. 
